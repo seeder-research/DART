@@ -1,0 +1,582 @@
+#!/bin/bash
+
+#############################################################################
+# Experiment Wrapper Script for Dynamic Pruning
+# Usage: ./run_experiment.sh
+# 
+# Features:
+# - Logs all output to files
+# - Tracks start/end times
+# - Saves experiment configuration
+# - Creates organized result directories
+#############################################################################
+
+# ============================================================================
+# CONFIGURATION - Modify these parameters for different experiments
+# ============================================================================
+
+DEVICE=6                  # CUDA device ID
+
+# Model configuration
+#MODEL="meta-llama/Llama-2-7b-hf" # Options: "gpt2", "gpt2-xl", "meta-llama/Llama-3.1-8B", "meta-llama/Llama-3.2-3B" etc.
+MODEL="meta-llama/Llama-3.2-3B-Instruct"
+CACHE_DIR="llm_weights"
+
+# Prompt configuration
+PROMPT_TYPE="custom"           # Options: "custom", "mmlu"
+PROMPT_SUBJECT=""           # For custom: "imc", "pizzas", "actress", etc.
+                               # For mmlu: "college_computer_science", etc.
+# CUSTOM_PROMPT_TEXT="Technology Review: March 2024
+
+# Today I learned about two fascinating topics: GPUs and ice cream.
+
+# First, let me explain GPUs. Graphics Processing Units are"       # Custom prompt text (optional, overrides PROMPT_SUBJECT)
+
+
+CUSTOM_PROMPT_TEXT="Follow these instructions carefully:
+
+Step 1: Write a paragraph explaining GPUs (Graphics Processing Units). Include:
+- What they are
+- How they differ from CPUs
+- What they're used for
+- Their architecture
+
+Step 2: After finishing the GPU explanation, write a completely separate paragraph about the ten most popular war movies around the world. Include:
+- Popular types
+- What makes each type unique
+- Which one to pick if we want to in Tamil.
+
+Begin now with Step 1."
+
+# CUSTOM_PROMPT_TEXT="Follow these instructions carefully:
+
+# Step 1: Write a paragraph explaining electric cars. Include:
+# - What they are
+# - How they differ from gasoline vehicles
+# - How their motors and batteries work
+# - Why they are considered environmentally friendly
+
+# Step 2: After finishing the electric car explanation, write a completely separate paragraph about Italian cuisine. Include:
+# - Popular dishes
+# - Key ingredients
+# - Regional differences in cooking styles
+
+# Begin now with Step 1."
+
+# CUSTOM_PROMPT_TEXT="Write 5 short paragraphs of very different topics."
+
+
+# CUSTOM_PROMPT_TEXT="Describe how electric cars are reshaping modern cities, and what a visitor might experience when spending time in Italy."
+
+#CUSTOM_PROMPT_TEXT="Write a dialogue between two experts regarding the rise of Artificial Intelligence. Expert A is an Economist focused purely on GDP and labor markets. Expert B is a Psychologist focused purely on human mental health. Start with Expert A."
+PROMPT_LENGTH=""               # Leave empty for None (no prompt length limit)
+
+# Pruning configuration
+## Uncomment and set these for specific pruning, comment the set below
+LAYER_TOPK="all:auto"
+MASKING_STEP=30
+RELEASE_STEP=""             # Step at which to release masked neurons (leave empty for None)
+GENERATION=500
+EMA_DECAY=""
+RANKING_METHOD="max"
+PRUNE_STRATEGY="topk"
+TOTAL_PRUNE_PERCENT=50.0
+
+## Comment these out when pruning.
+# LAYER_TOPK=""
+# MASKING_STEP=""
+# GENERATION=0
+# EMA_DECAY="0.5"                    # Decay factor for EMA (0.0 to 1.0, leave empty for None/L2 norm)
+# RANKING_METHOD="max"        # Method to rank neurons - max, mean, combined, product, magnitude
+# PRUNE_STRATEGY="auto"           # Pruning strategy - topk, auto
+
+# Mode of operation
+MODE="manual"               # Options: "manual", "auto"
+
+# Knowledge drift configuration
+KNOWLEDGE_DRIFT=false       # Enable knowledge drift evaluation
+
+# Verbose output
+VERBOSE=true               # Enable verbose output from NeuronDefuser
+
+# Activation saving configuration
+SAVE_ACTIVATIONS=false    # Set to true to save activations (uses more memory)
+
+# Evaluation configuration - Perplexity
+EVAL_PERPLEXITY=false           # Set to true to enable perplexity evaluation
+PPL_DATASETS="mmlu"          # Options: "custom", "mmlu" (space-separated)
+PPL_SUBJECTS="college_computer_science abstract_algebra high_school_biology high_school_world_history marketing philosophy professional_law"             # Subjects for perplexity evaluation (space-separated)
+#PPL_SUBJECTS="college_computer_science abstract_algebra high_school_biology virology high_school_world_history marketing philosophy professional_law world_religions business_ethics moral_disputes machine_learning"             # Subjects for perplexity evaluation (space-separated)
+                               # For custom: "imc", "food_corpus", "anne_corpus"
+                               # For mmlu: "college_computer_science", "machine_learning", etc.
+PPL_MAX_SAMPLES=200             # Max samples for perplexity eval (leave empty for all)
+
+# Evaluation configuration - MMLU
+EVAL_MMLU=false             # Set to true to enable MMLU evaluation
+MMLU_DATASETS="college_computer_science high_school_world_history marketing philosophy"
+#MMLU_DATASETS="college_computer_science abstract_algebra high_school_biology virology high_school_world_history marketing philosophy professional_law world_religions business_ethics moral_disputes machine_learning"
+                               # MMLU subjects to evaluate (space-separated)
+MMLU_SHOTS=2                   # Number of few-shot examples (0=zero-shot, 5=five-shot)
+MMLU_MAX_SAMPLES=200            # Max samples per MMLU task (leave empty for all)
+
+# Evaluation configuration - General NLP
+EVAL_GENERAL_NLP=false         # Set to true to enable general NLP evaluation
+GENERAL_NLP_DATASETS=""        # Options: "boolq rte hellaswag winogrande arc_easy arc_challenge openbookqa"
+GENERAL_NLP_MAX_SAMPLES=""     # Max samples for general NLP eval (leave empty for all)
+
+# Results directory
+EXPERIMENT_NAME=APPL_${TOTAL_PRUNE_PERCENT}_prune${MASKING_STEP}_rel${RELEASE_STEP}_gen${GENERATION}_winthresh_10_1.0sig
+BASE_RESULTS_DIR="/users/grad/abhishektyagi/wanda/wanda/results/knowledge_drift"
+MODEL_SAFE_NAME=$(echo "$MODEL" | sed 's/\//_/g')  # Replace / with _
+RESULTS_DIR="${BASE_RESULTS_DIR}/${MODEL_SAFE_NAME}/${EXPERIMENT_NAME}"
+
+# ============================================================================
+# SETUP
+# ============================================================================
+
+# Create results directory
+mkdir -p "$RESULTS_DIR"
+
+# Generate timestamp
+TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+START_EPOCH=$(date +%s)
+
+# Define log files - ONLY ONE TIMING LOG
+OUTPUT_LOG="${RESULTS_DIR}/output_${TIMESTAMP}.log"
+TIMING_LOG="${RESULTS_DIR}/timing_${TIMESTAMP}.log"  # Single timing file
+CONFIG_LOG="${RESULTS_DIR}/config_${TIMESTAMP}.json"
+LATEST_LINK="${RESULTS_DIR}/latest_run.log"
+LATEST_TIMING="${RESULTS_DIR}/latest_timing.log"  # Symlink to latest timing
+
+# ============================================================================
+# PRINT CONFIGURATION
+# ============================================================================
+
+print_config() {
+    echo "========================================" 
+    echo "EXPERIMENT CONFIGURATION"
+    echo "========================================" 
+    echo "Experiment Name: $EXPERIMENT_NAME"
+    echo "Model: $MODEL"
+    echo "Mode: $MODE"
+    echo "Prompt Type: $PROMPT_TYPE"
+    echo "Prompt Subject: $PROMPT_SUBJECT"
+    echo "Custom Prompt Text: ${CUSTOM_PROMPT_TEXT:-None}"
+    echo "Prompt Length: ${PROMPT_LENGTH:-None}"
+    echo "Layer TopK: ${LAYER_TOPK:-None}"
+    echo "Masking Step: ${MASKING_STEP:-None}"
+    echo "Release Step: ${RELEASE_STEP:-None}"
+    echo "EMA Decay: ${EMA_DECAY:-None (L2 norm)}"
+    echo "Ranking Method: $RANKING_METHOD"
+    echo "Prune Strategy: $PRUNE_STRATEGY"
+    echo "Total Prune Percent: $TOTAL_PRUNE_PERCENT%"
+    echo "Generation Tokens: $GENERATION"
+    echo "Knowledge Drift: $KNOWLEDGE_DRIFT"
+    echo "Verbose: $VERBOSE"
+    echo "Save Activations: $SAVE_ACTIVATIONS"
+    echo ""
+    echo "Evaluation Settings:"
+    echo "  Perplexity: $EVAL_PERPLEXITY"
+    if [ "$EVAL_PERPLEXITY" = true ]; then
+        echo "    - Datasets: $PPL_DATASETS"
+        echo "    - Subjects: $PPL_SUBJECTS"
+        echo "    - Max Samples: ${PPL_MAX_SAMPLES:-All}"
+    fi
+    echo "  MMLU: $EVAL_MMLU"
+    if [ "$EVAL_MMLU" = true ]; then
+        echo "    - Subjects: $MMLU_DATASETS"
+        echo "    - Shots: $MMLU_SHOTS"
+        echo "    - Max Samples: ${MMLU_MAX_SAMPLES:-All}"
+    fi
+    echo "  General NLP: $EVAL_GENERAL_NLP"
+    if [ "$EVAL_GENERAL_NLP" = true ]; then
+        echo "    - Datasets: ${GENERAL_NLP_DATASETS:-Default}"
+        echo "    - Max Samples: ${GENERAL_NLP_MAX_SAMPLES:-All}"
+    fi
+    echo ""
+    echo "Results Directory: $RESULTS_DIR"
+    echo "Started at: $START_TIME"
+    echo "========================================" 
+}
+
+# Print to terminal and timing log (single file)
+print_config | tee "$TIMING_LOG"
+
+# ============================================================================
+# SAVE CONFIGURATION TO JSON
+# ============================================================================
+
+# Determine prompt_length value for JSON (null if empty)
+if [ -z "$PROMPT_LENGTH" ]; then
+    PROMPT_LENGTH_JSON="null"
+else
+    PROMPT_LENGTH_JSON="$PROMPT_LENGTH"
+fi
+
+# Determine max samples for JSON
+if [ -z "$PPL_MAX_SAMPLES" ]; then
+    PPL_MAX_SAMPLES_JSON="null"
+else
+    PPL_MAX_SAMPLES_JSON="$PPL_MAX_SAMPLES"
+fi
+
+if [ -z "$MMLU_MAX_SAMPLES" ]; then
+    MMLU_MAX_SAMPLES_JSON="null"
+else
+    MMLU_MAX_SAMPLES_JSON="$MMLU_MAX_SAMPLES"
+fi
+
+if [ -z "$GENERAL_NLP_MAX_SAMPLES" ]; then
+    GENERAL_NLP_MAX_SAMPLES_JSON="null"
+else
+    GENERAL_NLP_MAX_SAMPLES_JSON="$GENERAL_NLP_MAX_SAMPLES"
+fi
+
+# Determine values for JSON (null if empty)
+if [ -z "$LAYER_TOPK" ]; then
+    LAYER_TOPK_JSON="null"
+else
+    LAYER_TOPK_JSON="\"$LAYER_TOPK\""
+fi
+
+if [ -z "$MASKING_STEP" ]; then
+    MASKING_STEP_JSON="null"
+else
+    MASKING_STEP_JSON="$MASKING_STEP"
+fi
+
+if [ -z "$RELEASE_STEP" ]; then
+    RELEASE_STEP_JSON="null"
+else
+    RELEASE_STEP_JSON="$RELEASE_STEP"
+fi
+
+if [ -z "$EMA_DECAY" ]; then
+    EMA_DECAY_JSON="null"
+else
+    EMA_DECAY_JSON="$EMA_DECAY"
+fi
+
+cat > "$CONFIG_LOG" << EOF
+{
+  "experiment_name": "$EXPERIMENT_NAME",
+  "timestamp": "$TIMESTAMP",
+  "start_time": "$START_TIME",
+  "model": "$MODEL",
+  "cache_dir": "$CACHE_DIR",
+  "mode": "$MODE",
+  "save_activations": $SAVE_ACTIVATIONS,
+  "verbose": $VERBOSE,
+  "knowledge_drift": $KNOWLEDGE_DRIFT,
+  "prompt": {
+    "type": "$PROMPT_TYPE",
+    "subject": "$PROMPT_SUBJECT",
+    "custom_text": "$CUSTOM_PROMPT_TEXT",
+    "length": $PROMPT_LENGTH_JSON
+  },
+  "pruning": {
+    "layer_topk": $LAYER_TOPK_JSON,
+    "masking_step": $MASKING_STEP_JSON,
+    "release_step": $RELEASE_STEP_JSON,
+    "ema_decay": $EMA_DECAY_JSON,
+    "ranking_method": "$RANKING_METHOD",
+    "prune_strategy": "$PRUNE_STRATEGY",
+    "total_prune_percent": $TOTAL_PRUNE_PERCENT,
+    "generation": $GENERATION
+  },
+  "evaluation": {
+    "perplexity": {
+      "enabled": $EVAL_PERPLEXITY,
+      "datasets": "$PPL_DATASETS",
+      "subjects": "$PPL_SUBJECTS",
+      "max_samples": $PPL_MAX_SAMPLES_JSON
+    },
+    "mmlu": {
+      "enabled": $EVAL_MMLU,
+      "datasets": "$MMLU_DATASETS",
+      "shots": $MMLU_SHOTS,
+      "max_samples": $MMLU_MAX_SAMPLES_JSON
+    },
+    "general_nlp": {
+      "enabled": $EVAL_GENERAL_NLP,
+      "datasets": "$GENERAL_NLP_DATASETS",
+      "max_samples": $GENERAL_NLP_MAX_SAMPLES_JSON
+    }
+  },
+  "results_dir": "$RESULTS_DIR"
+}
+EOF
+
+echo "Configuration saved to: $CONFIG_LOG" | tee -a "$TIMING_LOG"
+
+# ============================================================================
+# BUILD COMMAND
+# ============================================================================
+
+CMD="CUDA_VISIBLE_DEVICES=$DEVICE python -u dynamicPrune.py \
+    --model \"$MODEL\" \
+    --cache_dir \"$CACHE_DIR\" \
+    --mode \"$MODE\" \
+    --verbose \
+    --prompt_type \"$PROMPT_TYPE\""
+
+# Add prompt_subject only if it's set (not empty)
+if [ -n "$PROMPT_SUBJECT" ]; then
+    CMD="$CMD \
+    --prompt_subject \"$PROMPT_SUBJECT\""
+fi
+
+# Add custom_prompt_text only if it's set (not empty)
+if [ -n "$CUSTOM_PROMPT_TEXT" ]; then
+    CMD="$CMD \
+    --custom_prompt_text \"$CUSTOM_PROMPT_TEXT\""
+fi
+
+# Add prompt_length only if it's set (not empty)
+if [ -n "$PROMPT_LENGTH" ]; then
+    CMD="$CMD \
+    --prompt_length $PROMPT_LENGTH"
+fi
+
+# Add save_activations flag if enabled
+if [ "$SAVE_ACTIVATIONS" = true ]; then
+    CMD="$CMD \
+    --save_activations"
+fi
+
+# Add layer_topk only if set
+if [ -n "$LAYER_TOPK" ]; then
+    CMD="$CMD \
+    --layer_topk \"$LAYER_TOPK\""
+fi
+
+# Add maskingStep only if set
+if [ -n "$MASKING_STEP" ]; then
+    CMD="$CMD \
+    --maskingStep $MASKING_STEP"
+fi
+
+# Add releaseStep only if set
+if [ -n "$RELEASE_STEP" ]; then
+    CMD="$CMD \
+    --releaseStep $RELEASE_STEP"
+fi
+
+# Add ema_decay only if set
+if [ -n "$EMA_DECAY" ]; then
+    CMD="$CMD \
+    --ema_decay $EMA_DECAY"
+fi
+
+# Add ranking_method
+CMD="$CMD \
+    --ranking_method \"$RANKING_METHOD\""
+
+# Add prune_strategy
+CMD="$CMD \
+    --prune_strategy \"$PRUNE_STRATEGY\""
+
+# Add total_prune_percent
+CMD="$CMD \
+    --total_prune_percent $TOTAL_PRUNE_PERCENT"
+
+# Always add generation (assuming it's required)
+CMD="$CMD \
+    --generation $GENERATION"
+
+# Add knowledge_drift flag if enabled
+if [ "$KNOWLEDGE_DRIFT" = true ]; then
+    CMD="$CMD \
+    --knowledge_drift"
+fi
+
+# Add perplexity evaluation flags if enabled
+if [ "$EVAL_PERPLEXITY" = true ]; then
+    CMD="$CMD \
+    --eval_perplexity \
+    --ppl_datasets $PPL_DATASETS \
+    --ppl_subjects $PPL_SUBJECTS"
+    
+    if [ -n "$PPL_MAX_SAMPLES" ]; then
+        CMD="$CMD \
+    --ppl_max_samples $PPL_MAX_SAMPLES"
+    fi
+fi
+
+# Add MMLU evaluation flags if enabled
+if [ "$EVAL_MMLU" = true ]; then
+    CMD="$CMD \
+    --eval_mmlu \
+    --mmlu_datasets $MMLU_DATASETS \
+    --mmlu_shots $MMLU_SHOTS"
+    
+    if [ -n "$MMLU_MAX_SAMPLES" ]; then
+        CMD="$CMD \
+    --mmlu_max_samples $MMLU_MAX_SAMPLES"
+    fi
+fi
+
+# Add general NLP evaluation flags if enabled
+if [ "$EVAL_GENERAL_NLP" = true ]; then
+    CMD="$CMD \
+    --eval_general_nlp"
+    
+    if [ -n "$GENERAL_NLP_DATASETS" ]; then
+        CMD="$CMD \
+    --general_nlp_datasets $GENERAL_NLP_DATASETS"
+    fi
+    
+    if [ -n "$GENERAL_NLP_MAX_SAMPLES" ]; then
+        CMD="$CMD \
+    --general_nlp_max_samples $GENERAL_NLP_MAX_SAMPLES"
+    fi
+fi
+
+CMD="$CMD \
+    --save_res_dir \"$RESULTS_DIR\""
+
+echo "" | tee -a "$TIMING_LOG"
+echo "Command:" | tee -a "$TIMING_LOG"
+echo "$CMD" | tee -a "$TIMING_LOG"
+echo "" | tee -a "$TIMING_LOG"
+
+# ============================================================================
+# RUN EXPERIMENT
+# ============================================================================
+
+echo "Running experiment..." | tee -a "$TIMING_LOG"
+echo "Output will be saved to: $OUTPUT_LOG" | tee -a "$TIMING_LOG"
+echo "" | tee -a "$TIMING_LOG"
+
+# Run with time tracking
+{ time eval "$CMD"; } 2>&1 | tee "$OUTPUT_LOG"
+
+# Capture exit status
+EXIT_STATUS=${PIPESTATUS[0]}
+
+# ============================================================================
+# FINISH AND SAVE TIMING - ALL IN ONE FILE
+# ============================================================================
+
+END_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+END_EPOCH=$(date +%s)
+DURATION=$((END_EPOCH - START_EPOCH))
+DURATION_MIN=$((DURATION / 60))
+DURATION_SEC=$((DURATION % 60))
+
+# Extract Python timing information from output
+TIMING_START=$(grep "TIMING_START=" "$OUTPUT_LOG" | tail -1 | cut -d'=' -f2)
+TIMING_MODEL_LOAD=$(grep "TIMING_MODEL_LOAD=" "$OUTPUT_LOG" | tail -1 | cut -d'=' -f2)
+TIMING_PREFILL=$(grep "TIMING_PREFILL=" "$OUTPUT_LOG" | tail -1 | cut -d'=' -f2)
+TIMING_GENERATION=$(grep "TIMING_GENERATION=" "$OUTPUT_LOG" | tail -1 | cut -d'=' -f2)
+TIMING_EVAL_PPL=$(grep "TIMING_EVAL_PPL=" "$OUTPUT_LOG" | tail -1 | cut -d'=' -f2)
+TIMING_EVAL_MMLU=$(grep "TIMING_EVAL_MMLU=" "$OUTPUT_LOG" | tail -1 | cut -d'=' -f2)
+TIMING_EVAL_GENERAL_NLP=$(grep "TIMING_EVAL_GENERAL_NLP=" "$OUTPUT_LOG" | tail -1 | cut -d'=' -f2)
+TIMING_END=$(grep "TIMING_END=" "$OUTPUT_LOG" | tail -1 | cut -d'=' -f2)
+TIMING_TOTAL=$(grep "TIMING_TOTAL=" "$OUTPUT_LOG" | tail -1 | cut -d'=' -f2)
+
+# Write everything to the SINGLE timing log file
+{
+    echo ""
+    echo "========================================================================"
+    echo "EXPERIMENT COMPLETED"
+    echo "========================================================================"
+    echo "Finished at: $END_TIME"
+    echo "Duration: ${DURATION_MIN}m ${DURATION_SEC}s" "($DURATION seconds total)"
+    echo "Exit Status: $EXIT_STATUS"
+    echo ""
+    
+    # Bash timing from `time` command
+    echo "========================================================================"
+    echo "BASH TIMING (from 'time' command)"
+    echo "========================================================================"
+    grep -E "^(real|user|sys)" "$OUTPUT_LOG" | tail -3
+    echo ""
+    
+    # Python timing breakdown
+    if [ -n "$TIMING_START" ]; then
+        echo "========================================================================"
+        echo "PYTHON TIMING BREAKDOWN"
+        echo "========================================================================"
+        printf "%-25s %15s\n" "Phase" "Time (seconds)"
+        echo "------------------------------------------------------------------------"
+        printf "%-25s %15s\n" "Start timestamp" "${TIMING_START}"
+        printf "%-25s %15s\n" "Model load" "${TIMING_MODEL_LOAD}"
+        printf "%-25s %15s\n" "Prefill" "${TIMING_PREFILL}"
+        printf "%-25s %15s\n" "Generation" "${TIMING_GENERATION}"
+        printf "%-25s %15s\n" "Eval: Perplexity" "${TIMING_EVAL_PPL}"
+        printf "%-25s %15s\n" "Eval: MMLU" "${TIMING_EVAL_MMLU}"
+        printf "%-25s %15s\n" "Eval: General NLP" "${TIMING_EVAL_GENERAL_NLP}"
+        printf "%-25s %15s\n" "End timestamp" "${TIMING_END}"
+        echo "------------------------------------------------------------------------"
+        printf "%-25s %15s\n" "TOTAL" "${TIMING_TOTAL}"
+        echo ""
+        
+        # Calculate percentages
+        if [ -n "$TIMING_TOTAL" ] && [ "$(echo "$TIMING_TOTAL > 0" | bc -l 2>/dev/null)" = "1" ]; then
+            echo "Time Distribution:"
+            echo "------------------------------------------------------------------------"
+            # Use -c with proper escaping instead of heredoc
+            python3 -c "
+import sys
+try:
+    model_load = float('${TIMING_MODEL_LOAD}' if '${TIMING_MODEL_LOAD}' else '0')
+    prefill = float('${TIMING_PREFILL}' if '${TIMING_PREFILL}' else '0')
+    generation = float('${TIMING_GENERATION}' if '${TIMING_GENERATION}' else '0')
+    eval_ppl = float('${TIMING_EVAL_PPL}' if '${TIMING_EVAL_PPL}' else '0')
+    eval_mmlu = float('${TIMING_EVAL_MMLU}' if '${TIMING_EVAL_MMLU}' else '0')
+    eval_general_nlp = float('${TIMING_EVAL_GENERAL_NLP}' if '${TIMING_EVAL_GENERAL_NLP}' else '0')
+    total = float('${TIMING_TOTAL}' if '${TIMING_TOTAL}' else '0')
+    
+    if total > 0:
+        print(f'  Model load:        {model_load:10.2f}s  ({model_load/total*100:5.1f}%)')
+        print(f'  Prefill:           {prefill:10.2f}s  ({prefill/total*100:5.1f}%)')
+        print(f'  Generation:        {generation:10.2f}s  ({generation/total*100:5.1f}%)')
+        print(f'  Eval (Perplexity): {eval_ppl:10.2f}s  ({eval_ppl/total*100:5.1f}%)')
+        print(f'  Eval (MMLU):       {eval_mmlu:10.2f}s  ({eval_mmlu/total*100:5.1f}%)')
+        print(f'  Eval (General):    {eval_general_nlp:10.2f}s  ({eval_general_nlp/total*100:5.1f}%)')
+except Exception as e:
+    print(f'Error calculating percentages: {e}', file=sys.stderr)
+" 2>/dev/null
+            echo ""
+        fi
+    fi
+    
+
+    echo ""
+    echo "========================================================================"
+    echo "FILES SAVED"
+    echo "========================================================================"
+    echo "  Output log:  $OUTPUT_LOG"
+    echo "  Timing log:  $TIMING_LOG"
+    echo "  Config:      $CONFIG_LOG"
+    echo "========================================================================"
+    
+} | tee -a "$TIMING_LOG"
+
+# Create symlinks to latest files
+ln -sf "output_${TIMESTAMP}.log" "$LATEST_LINK"
+ln -sf "timing_${TIMESTAMP}.log" "$LATEST_TIMING"
+
+# ============================================================================
+# PRINT SUMMARY
+# ============================================================================
+
+echo ""
+echo "========================================" 
+echo "QUICK ACCESS"
+echo "========================================" 
+echo "View output:"
+echo "  cat $OUTPUT_LOG"
+echo "  # or: cat $LATEST_LINK"
+echo ""
+echo "View timing:"
+echo "  cat $TIMING_LOG"
+echo "  # or: cat $LATEST_TIMING"
+echo ""
+echo "View results directory:"
+echo "  ls -lh $RESULTS_DIR"
+echo "========================================" 
+
+exit $EXIT_STATUS
