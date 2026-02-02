@@ -20,7 +20,11 @@ To cite this paper, use
 If you have questions or thoughts regarding the tool or this work, please contact atygai@u.nus.edu or cenyunuo@u.nus.edu.
 
 
-https://github.com/user-attachments/assets/223a64ac-bc00-4bdd-afd7-09f970ad6dc9
+
+
+https://github.com/user-attachments/assets/f5dfd7fb-6261-49dc-bb1c-68d19e3f838f
+
+
 
 
 ## Getting Started
