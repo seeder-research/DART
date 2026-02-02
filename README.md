@@ -1,6 +1,6 @@
 # Dynamic Neuron Pruning for Large Language Models
 
-Paper: DART-ing Through the Drift: Dynamic Tracing of Knowledge Neurons for Adaptive Inference-Time Pruning
+Paper: DART-ing Through the Drift: Dynamic Tracing of Knowledge Neurons for Adaptive Inference-Time Pruning [[arXiv]](https://arxiv.org/abs/2601.22632)
 
 Abhishek Tyagi*, Yunuo Cen*, Shrey Dhorajiya, Bharadwaj Veeravalli, Xuanyao Fong
 
