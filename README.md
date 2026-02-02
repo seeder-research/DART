@@ -1,8 +1,31 @@
 # Dynamic Neuron Pruning for Large Language Models
 
-This project implements dynamic neuron pruning strategies for large language models with adaptive masking and knowledge drift detection.
+Paper: DART-ing Through the Drift: Dynamic Tracing of Knowledge Neurons for Adaptive Inference-Time Pruning
+
+Abhishek Tyagi*, Yunuo Cen*, Shrey Dhorajiya, Bharadwaj Veeravalli, Xuanyao Fong
+
+To cite this paper, use
+```
+@misc{tyagi2026dartingdriftdynamictracing,
+      title={DART-ing Through the Drift: Dynamic Tracing of Knowledge Neurons for Adaptive Inference-Time Pruning}, 
+      author={Abhishek Tyagi and Yunuo Cen and Shrey Dhorajiya and Bharadwaj Veeravalli and Xuanyao Fong},
+      year={2026},
+      eprint={2601.22632},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2601.22632}, 
+}
+```
+
+If you have questions or thoughts regarding the tool or this work, please contact atygai@u.nus.edu or cenyunuo@u.nus.edu.
+
+
+https://github.com/user-attachments/assets/223a64ac-bc00-4bdd-afd7-09f970ad6dc9
+
 
 ## Getting Started
+
+This project implements dynamic neuron pruning strategies for large language models with adaptive masking and knowledge drift detection.
 
 ### Prerequisites
 
