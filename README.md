@@ -2,7 +2,7 @@
 
 Paper: DART-ing Through the Drift: Dynamic Tracing of Knowledge Neurons for Adaptive Inference-Time Pruning [[arXiv]](https://arxiv.org/abs/2601.22632)
 
-Abhishek Tyagi*, Yunuo Cen*, Shrey Dhorajiya, Bharadwaj Veeravalli, Xuanyao Fong
+Abhishek Tyagi<sup>1</sup>, Yunuo Cen<sup>2</sup>, Shrey Dhorajiya, Bharadwaj Veeravalli, Xuanyao Fong
 
 To cite this paper, use
 ```
@@ -17,7 +17,7 @@ To cite this paper, use
 }
 ```
 
-If you have questions or thoughts regarding the tool or this work, please contact atygai@u.nus.edu or cenyunuo@u.nus.edu.
+If you have questions or thoughts regarding the tool or this work, please contact atygai@u.nus.edu<sup>1</sup> or cenyunuo@u.nus.edu<sup>2</sup>.
 
 
 
